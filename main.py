@@ -6,9 +6,9 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatType
 
 # --- НАСТРОЙКИ БЕЗОПАСНОСТИ ---
-BOT_TOKEN = os.getenv("8510480740:AAG36vfsteBthH9IOC6E5t3euT68D8HSZUk") 
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
 # Сюда мы передадим ID твоей группы через настройки Render
-ALLOWED_CHAT_ID_ENV = os.getenv("-1004407930773")
+ALLOWED_CHAT_ID_ENV = os.getenv("ALLOWED_CHAT_ID")
 
 STATIC_MESSAGE = "вот кстати мои соцсети"
 
