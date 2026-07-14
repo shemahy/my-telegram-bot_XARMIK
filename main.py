@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import threading
+import asyncio
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
@@ -30,11 +31,9 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write("Бот работает!".encode("utf-8"))
 
     def log_message(self, format, *args):
-        # Отключаем лишний спам в логах от пингов Render
         pass
 
 def start_web_server():
-    # Render автоматически передает порт в переменную окружения PORT
     port = int(os.getenv("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     logger.info(f"Вспомогательный веб-сервер запущен на порту {port}")
@@ -45,21 +44,18 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
     if not message:
         return
 
-    # Проверяем, задан ли ID разрешенной группы
     try:
         allowed_chat_id = int(ALLOWED_CHAT_ID_ENV)
     except (TypeError, ValueError):
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная ALLOWED_CHAT_ID не задана или указана неверно!")
         return
 
-    # Проверка безопасности
     if message.chat.id != allowed_chat_id:
         logger.warning(
             f"ВНИМАНИЕ! Попытка вызова бота в неразрешенной группе! ID: {message.chat.id}"
         )
         return
 
-    # Если проверка пройдена, проверяем, пришло ли сообщение от канала
     if message.sender_chat and message.sender_chat.type == ChatType.CHANNEL:
         channel_title = message.sender_chat.title or "Неизвестный канал"
         group_title = message.chat.title or "Неизвестная группа"
@@ -80,7 +76,15 @@ def main() -> None:
         logger.error("Ошибка: ID разрешенной группы не найден!")
         sys.exit(1)
 
-    # Запускаем вспомогательный веб-сервер в отдельном потоке, чтобы Render не отключал бота
+    # ИСПРАВЛЕНИЕ ОШИБКИ EVENT LOOP:
+    # Принудительно создаем и устанавливаем цикл событий для новых версий Python
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    # Запускаем вспомогательный веб-сервер
     threading.Thread(target=start_web_server, daemon=True).start()
 
     application = Application.builder().token(BOT_TOKEN).build()
