@@ -8,7 +8,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatType
 
-# Загрузка переменных окружения
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
 ALLOWED_CHAT_ID_ENV = os.getenv("ALLOWED_CHAT_ID")
 PHOTO_PATH_OR_URL = os.getenv("PHOTO_PATH_OR_URL")
@@ -17,13 +16,12 @@ YOUTUBE = os.getenv("YOUTUBE_WEBSITE")
 TWITCH = os.getenv("TWITCH_WEBSITE")
 
 STATIC_MESSAGE = "<b>Вот, кстати, его соц-сети! 🤵👇</b>\n\n<code>Подписывайтесь!!! 🤠</code>"
-# Динамическое создание конфигурации кнопок
+
 BUTTONS_CONFIG = []
 if TIKTOK: BUTTONS_CONFIG.append(("🎵 TikTok", TIKTOK))
 if YOUTUBE: BUTTONS_CONFIG.append(("🎥 YouTube", YOUTUBE))
 if TWITCH: BUTTONS_CONFIG.append(("📷 Twitch", TWITCH))
 
-# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -31,7 +29,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Веб-сервер для прохождения Health Check на Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -53,7 +50,6 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
     if not message:
         return
 
-    # Проверка ALLOWED_CHAT_ID (если она задана)
     if ALLOWED_CHAT_ID_ENV:
         try:
             allowed_chat_id = int(ALLOWED_CHAT_ID_ENV)
@@ -64,14 +60,13 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
             logger.error("ОШИБКА: Неверный формат ALLOWED_CHAT_ID!")
             return
 
-    # Проверяем, что сообщение пришло от имени канала в группу обсуждения
     if message.sender_chat and message.sender_chat.type == ChatType.CHANNEL:
         keyboard = []
         row = []
         for text, url in BUTTONS_CONFIG:
             if url: 
                 row.append(InlineKeyboardButton(text, url=url))
-                if len(row) == 2:  # По 2 кнопки в ряд
+                if len(row) == 2:
                     keyboard.append(row)
                     row = []
         if row:
@@ -84,53 +79,48 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
                 await message.reply_photo(
                     photo=PHOTO_PATH_OR_URL,
                     caption=STATIC_MESSAGE,
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
                 )
                 logger.info(f"Отправлено фото-сообщение в ответ на пост {message.message_id}")
             else:
                 await message.reply_text(
                     text=STATIC_MESSAGE,
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
                 )
                 logger.info(f"Отправлено текстовое сообщение в ответ на пост {message.message_id}")
         except Exception as e:
             logger.error(f"Ошибка при отправке ответа: {e}")
 
 async def main_async() -> None:
-    """Асинхронная точка входа для инициализации и запуска бота."""
     if not BOT_TOKEN:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная TELEGRAM_BOT_TOKEN не настроена!")
         sys.exit(1)
 
-    # Строим приложение бота
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
     
-    # Вручную инициализируем и запускаем polling в текущем event loop
     await application.initialize()
     await application.start()
     await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
     
     logger.info("Бот успешно запущен и ожидает обновлений...")
     
-    # Бесконечный цикл, чтобы поддерживать бота в рабочем состоянии
     try:
         while True:
             await asyncio.sleep(3600)
     except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
         logger.info("Получен сигнал остановки бота...")
     finally:
-        # Корректное и безопасное завершение работы
         logger.info("Завершение работы бота...")
         await application.updater.stop()
         await application.stop()
         await application.shutdown()
 
 def main() -> None:
-    # 1. Запуск веб-сервера для Render в отдельном потоке
     threading.Thread(target=start_web_server, daemon=True).start()
 
-    # 2. Безопасный запуск асинхронного движка бота через asyncio.run()
     try:
         asyncio.run(main_async())
     except (KeyboardInterrupt, SystemExit):
