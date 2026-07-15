@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import threading
+import asyncio
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
@@ -66,7 +67,6 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
 
     # Проверяем, что сообщение пришло от имени канала в группу обсуждения
     if message.sender_chat and message.sender_chat.type == ChatType.CHANNEL:
-        # Создаем клавиатуру с кнопками соцсетей
         keyboard = []
         row = []
         for text, url in BUTTONS_CONFIG:
@@ -81,7 +81,6 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
         try:
-            # Если указана ссылка на фото, отправляем фото с текстом
             if PHOTO_PATH_OR_URL:
                 await message.reply_photo(
                     photo=PHOTO_PATH_OR_URL,
@@ -90,7 +89,6 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
                 )
                 logger.info(f"Отправлено фото-сообщение в ответ на пост {message.message_id}")
             else:
-                # Иначе отправляем обычный текст
                 await message.reply_text(
                     text=STATIC_MESSAGE,
                     reply_markup=reply_markup
@@ -99,36 +97,45 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
         except Exception as e:
             logger.error(f"Ошибка при отправке ответа: {e}")
 
-def main() -> None:
+async def main_async() -> None:
+    """Асинхронная точка входа для инициализации и запуска бота."""
     if not BOT_TOKEN:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная TELEGRAM_BOT_TOKEN не настроена!")
         sys.exit(1)
 
-    # Запуск веб-сервера для Render в отдельном потоке
+    # Строим приложение бота
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
+    
+    # Вручную инициализируем и запускаем polling в текущем event loop
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    
+    logger.info("Бот успешно запущен и ожидает обновлений...")
+    
+    # Бесконечный цикл, чтобы поддерживать бота в рабочем состоянии
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+        logger.info("Получен сигнал остановки бота...")
+    finally:
+        # Корректное и безопасное завершение работы
+        logger.info("Завершение работы бота...")
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+
+def main() -> None:
+    # 1. Запуск веб-сервера для Render в отдельном потоке
     threading.Thread(target=start_web_server, daemon=True).start()
 
-    # Запуск Telegram-бота (библиотека сама создаст нужный event loop)
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
-    
-    logger.info("Бот успешно инициализирован и запускается...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
-    main()
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
-    
-    logger.info("Бот запускается...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
-    main()    logger.info("Бот запущен...")
+    # 2. Безопасный запуск асинхронного движка бота через asyncio.run()
     try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
-    except Exception as e:
-        logger.critical(f"Бот упал с ошибкой: {e}", exc_info=True)
-        sys.exit(1)
+        asyncio.run(main_async())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот остановлен.")
 
 if __name__ == "__main__":
     main()
