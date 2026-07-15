@@ -16,8 +16,7 @@ TIKTOK = os.getenv("TIKTOK_WEBSITE")
 YOUTUBE = os.getenv("YOUTUBE_WEBSITE")
 TWITCH = os.getenv("TWITCH_WEBSITE")
 
-STATIC_MESSAGE = "*Вот, кстати, его соц\-сети\! 🤵👇*\n\n`Подписывайтесь\!\!\! 🤠`"
-
+STATIC_MESSAGE = "<b>Вот, кстати, его соц-сети! 🤵👇</b>\n\n<code>Подписывайтесь!!! 🤠</code>"
 # Динамическое создание конфигурации кнопок
 BUTTONS_CONFIG = []
 if TIKTOK: BUTTONS_CONFIG.append(("🎵 TikTok", TIKTOK))
