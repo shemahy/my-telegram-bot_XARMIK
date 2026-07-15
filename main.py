@@ -8,35 +8,28 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatType
 
-# --- НАСТРОЙКИ БЕЗОПАСНОСТИ ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
 ALLOWED_CHAT_ID_ENV = os.getenv("ALLOWED_CHAT_ID")
 
-# --- НАСТРОЙКА ТЕКСТА СООБЩЕНИЯ ---
-STATIC_MESSAGE = "Вот, кстати, мои соцсети! 👇 Подписывайся:"
+STATIC_MESSAGE = "**Вот, кстати, его соц-сети!🤵👇**\n\n`Подпысывайтесь!!!🤠`"
 
-# --- НАСТРОЙКА КНОПОК (Просто пиши по шаблону!) ---
-# Шаблон простой: ("Текст кнопки", "Ссылка на сайт или канал")
-# Ты можешь добавлять сколько угодно кнопок, или удалять их.
-# Код сам автоматически разложит их по 2 штуки в один ряд!
 BUTTONS_CONFIG = [
-    ("📢 Telegram Канал", "https://t.me/telegram"),
-    ("🎥 Мой YouTube", "https://youtube.com"),
-    ("📸 Instagram", "https://instagram.com"),
-    ("💬 Чат поддержки", "https://t.me/telegram"),
-    ("🌐 Мой Сайт", "https://google.com"), # Пример 5-й кнопки (она встанет одна внизу)
+    ("🎵 TikTok", TIKTOK),
+    ("🎥 YouTube", YOUTUBE),
+    ("📷 Twitch", TWITCH),
 ]
 
+TIKTOK = os.getenv("TIKTOK_WEBSITE")
+YOUTUBE = os.getenv("YOUTUBE_WEBSITE")
+TWITCH = os.getenv("TWITCH_WEBSITE")
 
-# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     handlers=[logging.StreamHandler(sys.stdout)]
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(name)
 
-# --- ВЕБ-СЕРВЕР ДЛЯ ОБХОДА ОГРАНИЧЕНИЙ RENDER (FREE TIER) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -76,28 +69,24 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
         
         logger.info(f"Новый пост от '{channel_title}' в разрешенной группе '{group_title}'")
         
-        # --- АВТОМАТИЧЕСКАЯ ГРУППИРОВКА КНОПОК ПО 2 В РЯД ---
         keyboard = []
         current_row = []
         
         for text, url in BUTTONS_CONFIG:
-            # Создаем кнопку
             button = InlineKeyboardButton(text, url=url)
             current_row.append(button)
             
-            # Если в текущем ряду набралось 2 кнопки, добавляем этот ряд на клавиатуру
             if len(current_row) == 2:
                 keyboard.append(current_row)
-                current_row = [] # очищаем ряд для следующих кнопок
+                current_row = []
                 
-        # Если осталась одна лишняя кнопка в конце (нечетное количество), добавляем её в отдельный ряд
         if current_row:
             keyboard.append(current_row)
             
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         try:
-            await message.reply_text(STATIC_MESSAGE, reply_markup=reply_markup)
+            await message.reply_text(STATIC_MESSAGE, reply_markup=reply_markup, parse_mode="MarkdownV2")
             logger.info(f"Успешно ответили на пост ID {message.message_id} с авто-кнопками")
         except Exception as e:
             logger.error(f"Ошибка отправки ответа: {e}", exc_info=True)
@@ -129,5 +118,5 @@ def main() -> None:
         logger.critical(f"Бот упал с ошибкой: {e}", exc_info=True)
         sys.exit(1)
 
-if __name__ == "__main__":
+if name == "main":
     main()
