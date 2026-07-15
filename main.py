@@ -1,19 +1,20 @@
 import logging
 import os
 import sys
-import threading
-import asyncio
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatType
 
+# Получение переменных окружения
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
 ALLOWED_CHAT_ID_ENV = os.getenv("ALLOWED_CHAT_ID")
 PHOTO_PATH_OR_URL = os.getenv("PHOTO_PATH_OR_URL")
 TIKTOK = os.getenv("TIKTOK_WEBSITE")
 YOUTUBE = os.getenv("YOUTUBE_WEBSITE")
 TWITCH = os.getenv("TWITCH_WEBSITE")
+
+# Render автоматически предоставляет URL вашего приложения в этой переменной
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 STATIC_MESSAGE = "<b>Вот, кстати, его соц-сети! 🤵👇</b>\n\n<code>Подписывайтесь!!! 🤠</code>"
 
@@ -28,22 +29,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
-
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write("Бот работает!".encode("utf-8"))
-
-    def log_message(self, format, *args):
-        pass
-
-def start_web_server():
-    port = int(os.getenv("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    logger.info(f"Вспомогательный веб-сервер запущен на порту {port}")
-    server.serve_forever()
 
 async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
@@ -93,38 +78,25 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
         except Exception as e:
             logger.error(f"Ошибка при отправке ответа: {e}")
 
-async def main_async() -> None:
+def main() -> None:
     if not BOT_TOKEN:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная TELEGRAM_BOT_TOKEN не настроена!")
         sys.exit(1)
 
+    if not RENDER_EXTERNAL_URL:
+        logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная RENDER_EXTERNAL_URL не настроена на Render!")
+        sys.exit(1)
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
-    
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    
-    logger.info("Бот успешно запущен и ожидает обновлений...")
-    
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
-        logger.info("Получен сигнал остановки бота...")
-    finally:
-        logger.info("Завершение работы бота...")
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
-
-def main() -> None:
-    threading.Thread(target=start_web_server, daemon=True).start()
-
-    try:
-        asyncio.run(main_async())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Бот остановлен.")
+    port = int(os.getenv("PORT", 10000))
+    logger.info("Запуск бота в режиме WEBHOOK...")
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}",
+        allowed_updates=Update.ALL_TYPES
+    )
 
 if __name__ == "__main__":
     main()
