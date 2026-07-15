@@ -83,16 +83,12 @@ def main() -> None:
     if not RENDER_EXTERNAL_URL:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная RENDER_EXTERNAL_URL не настроена на Render!")
         sys.exit(1)
-
-    # РЕШЕНИЕ ПРОБЛЕМЫ С EVENT LOOP ДЛЯ НОВЫХ ВЕРСИЙ PYTHON:
-    # Явно создаем новый цикл событий и делаем его активным в главном потоке
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    # Инициализация приложения telegram
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
     
