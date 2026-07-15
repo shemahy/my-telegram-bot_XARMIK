@@ -1,21 +1,18 @@
 import logging
 import os
 import sys
-import asyncio  # Добавили импорт asyncio
+import asyncio 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatType
 
-# Получение переменных окружения
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
 ALLOWED_CHAT_ID_ENV = os.getenv("ALLOWED_CHAT_ID")
 PHOTO_PATH_OR_URL = os.getenv("PHOTO_PATH_OR_URL")
 TIKTOK = os.getenv("TIKTOK_WEBSITE")
 YOUTUBE = os.getenv("YOUTUBE_WEBSITE")
 TWITCH = os.getenv("TWITCH_WEBSITE")
-
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
-
 STATIC_MESSAGE = "<b>Вот, кстати, его соц-сети! 🤵👇</b>\n\n<code>Подписывайтесь!!! 🤠</code>"
 
 BUTTONS_CONFIG = []
