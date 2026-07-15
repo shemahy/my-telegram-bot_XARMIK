@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import asyncio  # Добавили импорт asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatType
@@ -13,7 +14,6 @@ TIKTOK = os.getenv("TIKTOK_WEBSITE")
 YOUTUBE = os.getenv("YOUTUBE_WEBSITE")
 TWITCH = os.getenv("TWITCH_WEBSITE")
 
-# Render автоматически предоставляет URL вашего приложения в этой переменной
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 STATIC_MESSAGE = "<b>Вот, кстати, его соц-сети! 🤵👇</b>\n\n<code>Подписывайтесь!!! 🤠</code>"
@@ -86,10 +86,23 @@ def main() -> None:
     if not RENDER_EXTERNAL_URL:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная RENDER_EXTERNAL_URL не настроена на Render!")
         sys.exit(1)
+
+    # РЕШЕНИЕ ПРОБЛЕМЫ С EVENT LOOP ДЛЯ НОВЫХ ВЕРСИЙ PYTHON:
+    # Явно создаем новый цикл событий и делаем его активным в главном потоке
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    # Инициализация приложения telegram
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
+    
     port = int(os.getenv("PORT", 10000))
+    
     logger.info("Запуск бота в режиме WEBHOOK...")
+    
     application.run_webhook(
         listen="0.0.0.0",
         port=port,
