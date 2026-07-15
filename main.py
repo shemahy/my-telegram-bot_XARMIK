@@ -10,18 +10,17 @@ from telegram.constants import ChatType
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
 ALLOWED_CHAT_ID_ENV = os.getenv("ALLOWED_CHAT_ID")
-
-STATIC_MESSAGE = "**Вот, кстати, его соц-сети!🤵👇**\n\n`Подпысывайтесь!!!🤠`"
+PHOTO_PATH_OR_URL = os.getenv("PHOTO_PATH_OR_URL")
+TIKTOK = os.getenv("TIKTOK_WEBSITE")
+YOUTUBE = os.getenv("YOUTUBE_WEBSITE")
+TWITCH = os.getenv("TWITCH_WEBSITE")
+STATIC_MESSAGE = "Вот, кстати, его соц-сети!🤵👇\n\nПодпысывайтесь!!!🤠"
 
 BUTTONS_CONFIG = [
     ("🎵 TikTok", TIKTOK),
     ("🎥 YouTube", YOUTUBE),
     ("📷 Twitch", TWITCH),
 ]
-
-TIKTOK = os.getenv("TIKTOK_WEBSITE")
-YOUTUBE = os.getenv("YOUTUBE_WEBSITE")
-TWITCH = os.getenv("TWITCH_WEBSITE")
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -86,7 +85,8 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         try:
-            await message.reply_text(STATIC_MESSAGE, reply_markup=reply_markup, parse_mode="MarkdownV2")
+            # Изменено на отправку фото с подписью
+            await message.reply_photo(photo=PHOTO_PATH_OR_URL, caption=STATIC_MESSAGE, reply_markup=reply_markup, parse_mode="MarkdownV2")
             logger.info(f"Успешно ответили на пост ID {message.message_id} с авто-кнопками")
         except Exception as e:
             logger.error(f"Ошибка отправки ответа: {e}", exc_info=True)
