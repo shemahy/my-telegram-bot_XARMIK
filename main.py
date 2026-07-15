@@ -53,7 +53,7 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
     try:
         allowed_chat_id = int(ALLOWED_CHAT_ID_ENV)
     except (TypeError, ValueError):
-        logger.error("КРИТИЧЕСКАЯ ОШИБКА: ALLOWED_CHAT_ID не задана или не является числом!")
+        logger.error("ОШИБКА: ALLOWED_CHAT_ID не задана!")
         return
 
     if message.chat.id != allowed_chat_id:
@@ -78,34 +78,37 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
                 await message.reply_photo(
                     photo=PHOTO_PATH_OR_URL,
                     caption=STATIC_MESSAGE,
-                    reply_markup=reply_markup,
-                    parse_mode=None
+                    reply_markup=reply_markup
                 )
             else:
                 await message.reply_text(
                     text=STATIC_MESSAGE,
                     reply_markup=reply_markup
                 )
-            logger.info(f"Успешно ответили на пост ID {message.message_id}")
         except Exception as e:
-            logger.error(f"Ошибка отправки ответа: {e}", exc_info=True)
+            logger.error(f"Ошибка отправки: {e}")
 
 def main() -> None:
-    if not BOT_TOKEN: 
-        logger.error("Ошибка: TELEGRAM_BOT_TOKEN не найден!")
+    if not BOT_TOKEN or not ALLOWED_CHAT_ID_ENV:
+        logger.error("Ошибка: Переменные окружения не настроены!")
         sys.exit(1)
-        
-    if not ALLOWED_CHAT_ID_ENV:
-        logger.error("Ошибка: ID разрешенной группы не найден!")
-        sys.exit(1)
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
     threading.Thread(target=start_web_server, daemon=True).start()
 
     application = Application.builder().token(BOT_TOKEN).build()
-
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
     
-    logger.info("Бот запущен...")
+    logger.info("Бот запускается...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()    logger.info("Бот запущен...")
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
