@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -12,6 +13,11 @@ from telegram import (
     ReplyKeyboardRemove,
     KeyboardButton,
     WebAppInfo,
+    InputMediaPhoto,
+    InputMediaVideo,
+    InputMediaAnimation,
+    InputMediaDocument,
+    InputMediaAudio,
 )
 from telegram.ext import (
     Application,
@@ -22,7 +28,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from telegram.constants import ChatType
+from telegram.constants import ChatType, ParseMode
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ALLOWED_CHAT_ID_ENV = os.getenv("ALLOWED_CHAT_ID")          # группа, куда репостятся посты из канала
@@ -112,6 +118,11 @@ async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEF
 #  ФУНКЦИЯ 2: создание постов с кастомной клавиатурой через
 #  Telegram Mini App. Работает только в личке с ботом и только
 #  для ADMIN_USER_ID.
+#
+#  Поддерживаемый контент поста: текст, фото, видео, видео-кружки,
+#  GIF-анимации, документы, аудио и голосовые сообщения — с подписью
+#  или без, а также альбомы (несколько фото/видео/документов/аудио,
+#  отправленных одним "пакетом", как обычный Telegram-альбом).
 # ============================================================
 
 WAITING_CONTENT, WAITING_KEYBOARD, WAITING_CONFIRM = range(3)
@@ -121,13 +132,35 @@ URL_RE = re.compile(r"^(https?://|tg://)\S+$", re.IGNORECASE)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MINIAPP_HTML_PATH = os.path.join(BASE_DIR, "miniapp.html")
 
+# Сколько секунд ждать после очередной части альбома, прежде чем считать,
+# что все части пришли, и двигаться дальше по сценарию.
+ALBUM_DEBOUNCE_SECONDS = 1.0
+
+# Временное хранилище частей альбомов, которые ещё собираются.
+# Ключ: (user_id, media_group_id) -> {"items": [...], "caption_html": str, "generation": int}
+pending_albums: dict = {}
+
+# Какой метод бота и какое имя параметра использовать для отправки каждого типа медиа.
+MEDIA_SEND_INFO = {
+    "photo": ("send_photo", "photo"),
+    "video": ("send_video", "video"),
+    "video_note": ("send_video_note", "video_note"),
+    "animation": ("send_animation", "animation"),
+    "document": ("send_document", "document"),
+    "audio": ("send_audio", "audio"),
+    "voice": ("send_voice", "voice"),
+}
+
+# Типы, которые Telegram не даёт снабдить подписью (caption) при отправке.
+NO_CAPTION_TYPES = {"video_note", "voice"}
+
 
 def _load_miniapp_html() -> str:
     try:
         with open(MINIAPP_HTML_PATH, "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
-        logger.error("Файл miniapp.html не найден рядом с code.py!")
+        logger.error("Файл miniapp.html не найден рядом с main.py!")
         return "<h1>miniapp.html не найден на сервере</h1>"
 
 
@@ -214,40 +247,114 @@ def parse_keyboard_webapp_json(raw: str):
     return rows
 
 
-async def newpost_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    admin_id = _get_admin_id()
-    if not admin_id or update.effective_user.id != admin_id:
-        # Молча игнорируем всех, кроме назначенного администратора
-        return ConversationHandler.END
+# ------------------------------------------------------------
+#  Вспомогательные функции для работы с контентом поста
+# ------------------------------------------------------------
 
-    if not _get_post_channel_id():
-        await update.message.reply_text(
-            "❗️ Переменная POST_CHANNEL_ID не настроена на хостинге. "
-            "Добавьте её и перезапустите бота."
-        )
-        return ConversationHandler.END
-
-    context.user_data.clear()
-    await update.message.reply_text(
-        "📝 Пришлите содержимое поста — текст или фото с подписью.\n\n"
-        "Для отмены в любой момент отправьте /cancel"
-    )
-    return WAITING_CONTENT
-
-
-async def newpost_receive_content(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    message = update.effective_message
-
+def _extract_media(message):
+    """Возвращает (тип_медиа, file_id) для поддерживаемых типов, иначе (None, None)."""
     if message.photo:
-        context.user_data["photo_file_id"] = message.photo[-1].file_id
-        context.user_data["text"] = message.caption or ""
-    elif message.text:
-        context.user_data["photo_file_id"] = None
-        context.user_data["text"] = message.text
-    else:
-        await message.reply_text("Пришлите, пожалуйста, текст или фото с подписью.")
-        return WAITING_CONTENT
+        return "photo", message.photo[-1].file_id
+    if message.video:
+        return "video", message.video.file_id
+    if message.video_note:
+        return "video_note", message.video_note.file_id
+    if message.animation:
+        return "animation", message.animation.file_id
+    if message.document:
+        return "document", message.document.file_id
+    if message.audio:
+        return "audio", message.audio.file_id
+    if message.voice:
+        return "voice", message.voice.file_id
+    return None, None
 
+
+def _build_input_media(item: dict, caption: str = None):
+    """Строит InputMedia* для отправки альбома через send_media_group."""
+    media_type = item["type"]
+    file_id = item["file_id"]
+    extra = {}
+    if caption:
+        extra["caption"] = caption
+        extra["parse_mode"] = ParseMode.HTML
+
+    if media_type == "photo":
+        return InputMediaPhoto(media=file_id, **extra)
+    if media_type == "video":
+        return InputMediaVideo(media=file_id, **extra)
+    if media_type == "animation":
+        return InputMediaAnimation(media=file_id, **extra)
+    if media_type == "document":
+        return InputMediaDocument(media=file_id, **extra)
+    if media_type == "audio":
+        return InputMediaAudio(media=file_id, **extra)
+    raise ValueError(
+        f"Тип «{media_type}» нельзя объединить в альбом "
+        f"(Telegram группирует только фото/видео, только документы или только аудио)."
+    )
+
+
+async def _send_single_media(bot, chat_id, item: dict, text: str, reply_markup=None):
+    method_name, param_name = MEDIA_SEND_INFO[item["type"]]
+    method = getattr(bot, method_name)
+
+    # Видео-кружки и голосовые Telegram не позволяет снабдить подписью —
+    # отправляем медиа с клавиатурой, а текст (если есть) отдельным сообщением.
+    if item["type"] in NO_CAPTION_TYPES:
+        sent = await method(
+            chat_id=chat_id,
+            **{param_name: item["file_id"]},
+            reply_markup=reply_markup,
+        )
+        if text:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+        return sent
+
+    return await method(
+        chat_id=chat_id,
+        **{param_name: item["file_id"]},
+        caption=text or None,
+        parse_mode=ParseMode.HTML if text else None,
+        reply_markup=reply_markup,
+    )
+
+
+async def _send_content(bot, chat_id, content_items: list, text: str, reply_markup=None,
+                        followup_label: str = "👇 Кнопки к посту:"):
+    """
+    Единая точка отправки поста (используется и для превью, и для реальной публикации).
+
+    - Нет медиа -> обычное текстовое сообщение.
+    - Одно медиа -> одно сообщение с подписью и клавиатурой.
+    - Несколько медиа (альбом) -> send_media_group + (если есть клавиатура)
+      отдельное сообщение с кнопками сразу после, т.к. Telegram не позволяет
+      прикреплять inline-клавиатуру к альбомам.
+    """
+    if not content_items:
+        return await bot.send_message(
+            chat_id=chat_id,
+            text=text or "⁣",
+            parse_mode=ParseMode.HTML if text else None,
+            reply_markup=reply_markup,
+        )
+
+    if len(content_items) == 1:
+        return await _send_single_media(bot, chat_id, content_items[0], text, reply_markup)
+
+    media_list = [
+        _build_input_media(item, text if (idx == 0 and text) else None)
+        for idx, item in enumerate(content_items)
+    ]
+    sent = await bot.send_media_group(chat_id=chat_id, media=media_list)
+    if reply_markup is not None:
+        await bot.send_message(chat_id=chat_id, text=followup_label, reply_markup=reply_markup)
+    return sent
+
+
+async def _prompt_for_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает шаг настройки кнопок (после того как контент поста определён)."""
+    message = update.effective_message
     miniapp_url = _get_miniapp_url()
     if miniapp_url:
         keyboard = ReplyKeyboardMarkup(
@@ -271,6 +378,99 @@ async def newpost_receive_content(update: Update, context: ContextTypes.DEFAULT_
             parse_mode="HTML",
         )
     return WAITING_KEYBOARD
+
+
+async def _handle_album_part(update: Update, context: ContextTypes.DEFAULT_TYPE, message):
+    """
+    Собирает части альбома (несколько сообщений с одним media_group_id).
+    Каждая часть "ждёт" ALBUM_DEBOUNCE_SECONDS — если за это время не пришла
+    ещё одна часть, значит альбом полностью получен, и можно двигаться дальше.
+    Требует concurrent_updates=True у Application (см. main()).
+
+    Возвращает WAITING_KEYBOARD только у "последней" части (которая завершает сбор).
+    У остальных частей возвращает None — это значит "не менять состояние диалога",
+    чтобы промежуточные части не сбрасывали диалог обратно в WAITING_CONTENT.
+    """
+    media_type, file_id = _extract_media(message)
+    if not media_type:
+        # Часть альбома неподдерживаемого типа — просто пропускаем её
+        return None
+
+    key = (update.effective_user.id, message.media_group_id)
+    entry = pending_albums.setdefault(key, {"items": [], "caption_html": "", "generation": 0})
+    entry["items"].append({"type": media_type, "file_id": file_id, "message_id": message.message_id})
+    if message.caption:
+        entry["caption_html"] = message.caption_html
+    entry["generation"] += 1
+    my_generation = entry["generation"]
+
+    await asyncio.sleep(ALBUM_DEBOUNCE_SECONDS)
+
+    entry = pending_albums.get(key)
+    if entry is None or entry["generation"] != my_generation:
+        # Пока мы ждали, пришла ещё одна часть альбома — её обработчик и завершит сбор.
+        # Возвращаем None, чтобы НЕ сбрасывать состояние диалога.
+        return None
+
+    del pending_albums[key]
+    items = sorted(entry["items"], key=lambda it: it["message_id"])
+
+    context.user_data["content_items"] = items
+    context.user_data["text"] = entry["caption_html"]
+
+    return await _prompt_for_keyboard(update, context)
+
+
+# ------------------------------------------------------------
+#  Шаги сценария /newpost
+# ------------------------------------------------------------
+
+async def newpost_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    admin_id = _get_admin_id()
+    if not admin_id or update.effective_user.id != admin_id:
+        # Молча игнорируем всех, кроме назначенного администратора
+        return ConversationHandler.END
+
+    if not _get_post_channel_id():
+        await update.message.reply_text(
+            "❗️ Переменная POST_CHANNEL_ID не настроена на хостинге. "
+            "Добавьте её и перезапустите бота."
+        )
+        return ConversationHandler.END
+
+    context.user_data.clear()
+    await update.message.reply_text(
+        "📝 Пришлите содержимое поста: текст, фото, видео, видео-кружок, GIF, документ, "
+        "аудио или голосовое сообщение — с подписью или без.\n\n"
+        "Можно прислать и альбом (несколько фото/видео/документов/аудио одним "
+        "пакетом, как обычно в Telegram) — бот дождётся всех частей.\n\n"
+        "Для отмены в любой момент отправьте /cancel"
+    )
+    return WAITING_CONTENT
+
+
+async def newpost_receive_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.effective_message
+
+    if message.media_group_id:
+        return await _handle_album_part(update, context, message)
+
+    media_type, file_id = _extract_media(message)
+
+    if media_type:
+        context.user_data["content_items"] = [{"type": media_type, "file_id": file_id}]
+        context.user_data["text"] = message.caption_html if message.caption else ""
+    elif message.text:
+        context.user_data["content_items"] = []
+        context.user_data["text"] = message.text_html or message.text
+    else:
+        await message.reply_text(
+            "Пришлите, пожалуйста, текст, фото, видео, видео-кружок, GIF, документ, аудио или "
+            "голосовое сообщение (можно с подписью, можно без)."
+        )
+        return WAITING_CONTENT
+
+    return await _prompt_for_keyboard(update, context)
 
 
 async def newpost_receive_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -329,14 +529,32 @@ async def newpost_show_preview(update: Update, context: ContextTypes.DEFAULT_TYP
     ])
     reply_markup = InlineKeyboardMarkup(preview_rows)
 
-    photo_file_id = context.user_data.get("photo_file_id")
+    content_items = context.user_data.get("content_items") or []
     text = context.user_data.get("text", "")
 
-    await message.reply_text("Вот как будет выглядеть пост 👇 (кнопки «Опубликовать/Отмена» в канал не попадут)")
-    if photo_file_id:
-        await message.reply_photo(photo=photo_file_id, caption=text, reply_markup=reply_markup)
-    else:
-        await message.reply_text(text=text, reply_markup=reply_markup)
+    note = "Вот как будет выглядеть пост 👇"
+    if len(content_items) > 1:
+        note += (
+            "\n\nЭто альбом — Telegram не даёт прикрепить кнопки прямо к альбому, поэтому кнопки "
+            "«Опубликовать/Отмена» (и ваши кнопки-ссылки, если есть) придут отдельным сообщением "
+            "сразу под ним. В канале при публикации будет так же."
+        )
+    await message.reply_text(note)
+
+    try:
+        await _send_content(
+            context.bot,
+            message.chat.id,
+            content_items,
+            text,
+            reply_markup=reply_markup,
+            followup_label="👇 Подтвердите публикацию:",
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при показе превью поста: {e}")
+        await message.reply_text(f"❌ Не получилось показать превью: {e}")
+        context.user_data.clear()
+        return ConversationHandler.END
 
     return WAITING_CONFIRM
 
@@ -346,19 +564,20 @@ async def newpost_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
 
     channel_id = _get_post_channel_id()
-    photo_file_id = context.user_data.get("photo_file_id")
+    content_items = context.user_data.get("content_items") or []
     text = context.user_data.get("text", "")
     rows = context.user_data.get("keyboard_rows")
     reply_markup = InlineKeyboardMarkup(rows) if rows else None
 
     try:
-        if photo_file_id:
-            await context.bot.send_photo(
-                chat_id=channel_id, photo=photo_file_id, caption=text, reply_markup=reply_markup
-            )
-        else:
-            await context.bot.send_message(chat_id=channel_id, text=text, reply_markup=reply_markup)
-
+        await _send_content(
+            context.bot,
+            channel_id,
+            content_items,
+            text,
+            reply_markup=reply_markup,
+            followup_label="👇",
+        )
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text("✅ Пост опубликован в канал!")
         logger.info(f"Пост опубликован в канал {channel_id} пользователем {update.effective_user.id}")
@@ -385,12 +604,24 @@ async def newpost_cancel_command(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 
+# Любой из этих типов контента принимается на шаге WAITING_CONTENT.
+CONTENT_FILTERS = (
+    filters.TEXT
+    | filters.PHOTO
+    | filters.VIDEO
+    | filters.VIDEO_NOTE
+    | filters.ANIMATION
+    | filters.Document.ALL
+    | filters.AUDIO
+    | filters.VOICE
+)
+
 newpost_conversation = ConversationHandler(
     entry_points=[CommandHandler("newpost", newpost_start, filters=filters.ChatType.PRIVATE)],
     states={
         WAITING_CONTENT: [
             MessageHandler(
-                filters.ChatType.PRIVATE & (filters.TEXT | filters.PHOTO) & ~filters.COMMAND,
+                filters.ChatType.PRIVATE & CONTENT_FILTERS & ~filters.COMMAND,
                 newpost_receive_content,
             )
         ],
@@ -458,7 +689,14 @@ def main() -> None:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная RENDER_EXTERNAL_URL не настроена на Render!")
         sys.exit(1)
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        # concurrent_updates нужен, чтобы бот мог параллельно "собирать" части
+        # альбома (несколько сообщений с одним media_group_id), пока ждёт debounce.
+        .concurrent_updates(True)
+        .build()
+    )
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
     application.add_handler(newpost_conversation)
 
