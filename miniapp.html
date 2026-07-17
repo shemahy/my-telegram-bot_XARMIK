@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Конструктор кнопок</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #f0f0f3);
+    --text: var(--tg-theme-text-color, #1c1c1e);
+    --hint: var(--tg-theme-hint-color, #8e8e93);
+    --link: var(--tg-theme-link-color, #2f6bff);
+    --button: var(--tg-theme-button-color, #2f6bff);
+    --button-text: var(--tg-theme-button-text-color, #ffffff);
+    --danger: #ff3b30;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px 16px 96px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  h1 {
+    font-size: 18px;
+    margin: 4px 0 4px;
+  }
+  p.subtitle {
+    color: var(--hint);
+    font-size: 13px;
+    margin: 0 0 18px;
+    line-height: 1.4;
+  }
+  .close-link {
+    display: inline-block;
+    color: var(--hint);
+    font-size: 13px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .row-card {
+    background: var(--secondary-bg);
+    border-radius: 14px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .row-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .row-card-header span {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--hint);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .row-card-header button.remove-row {
+    background: none;
+    border: none;
+    color: var(--danger);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 4px 6px;
+  }
+  .button-item {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+  .button-item .fields {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--bg);
+    border-radius: 10px;
+    padding: 8px 10px;
+  }
+  .button-item input {
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 14px;
+    padding: 4px 0;
+    width: 100%;
+    font-family: inherit;
+  }
+  .button-item input::placeholder { color: var(--hint); }
+  .button-item .fields.error {
+    box-shadow: 0 0 0 1.5px var(--danger);
+  }
+  .divider {
+    height: 1px;
+    background: var(--hint);
+    opacity: 0.25;
+    margin: 2px 0;
+  }
+  .remove-btn {
+    background: none;
+    border: none;
+    color: var(--hint);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 6px;
+  }
+  .add-button-btn {
+    width: 100%;
+    background: var(--bg);
+    border: 1.5px dashed var(--hint);
+    color: var(--link);
+    border-radius: 10px;
+    padding: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    margin-top: 2px;
+  }
+  .add-button-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .add-row-btn {
+    width: 100%;
+    background: var(--secondary-bg);
+    border: none;
+    color: var(--link);
+    border-radius: 14px;
+    padding: 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+  .preview {
+    margin-top: 24px;
+  }
+  .preview-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--hint);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 8px;
+  }
+  .preview-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .preview-pill {
+    flex: 1;
+    background: var(--secondary-bg);
+    color: var(--link);
+    border-radius: 8px;
+    padding: 9px 6px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .empty-hint {
+    color: var(--hint);
+    font-size: 13px;
+    text-align: center;
+    padding: 20px 0;
+  }
+</style>
+</head>
+<body>
+
+  <span class="close-link" id="closeLink">✕ Закрыть без сохранения</span>
+  <h1>Кнопки под постом</h1>
+  <p class="subtitle">
+    Каждая карточка ниже — это отдельный ряд кнопок. Внутри ряда можно добавить
+    несколько кнопок — они встанут рядом. Порядок карточек = порядок рядов сверху вниз.
+  </p>
+
+  <div id="rowsContainer"></div>
+
+  <button class="add-row-btn" id="addRowBtn">+ Добавить ряд кнопок</button>
+
+  <div class="preview">
+    <div class="preview-title">Превью раскладки</div>
+    <div id="previewContainer"></div>
+  </div>
+
+<script>
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+  }
+
+  const MAX_BUTTONS_PER_ROW = 8;
+  const MAX_ROWS = 12;
+
+  let uid = 0;
+  const nextId = () => (++uid).toString();
+
+  let rows = [
+    [{ id: nextId(), text: "", url: "" }]
+  ];
+
+  const rowsContainer = document.getElementById("rowsContainer");
+  const previewContainer = document.getElementById("previewContainer");
+  const addRowBtn = document.getElementById("addRowBtn");
+  const closeLink = document.getElementById("closeLink");
+
+  function isValidUrl(url) {
+    return /^(https?:\/\/|tg:\/\/)\S+$/i.test(url.trim());
+  }
+
+  function buttonState(btn) {
+    const hasText = btn.text.trim().length > 0;
+    const hasUrl = btn.url.trim().length > 0;
+    if (!hasText && !hasUrl) return "empty";
+    if (hasText && hasUrl && isValidUrl(btn.url)) return "valid";
+    return "invalid";
+  }
+
+  function render() {
+    rowsContainer.innerHTML = "";
+
+    rows.forEach((row, rowIndex) => {
+      const card = document.createElement("div");
+      card.className = "row-card";
+
+      const header = document.createElement("div");
+      header.className = "row-card-header";
+      header.innerHTML = `<span>Ряд ${rowIndex + 1}</span>`;
+
+      const removeRowBtn = document.createElement("button");
+      removeRowBtn.className = "remove-row";
+      removeRowBtn.textContent = "Удалить ряд";
+      removeRowBtn.onclick = () => {
+        rows.splice(rowIndex, 1);
+        render();
+      };
+      header.appendChild(removeRowBtn);
+      card.appendChild(header);
+
+      row.forEach((btn, btnIndex) => {
+        const item = document.createElement("div");
+        item.className = "button-item";
+
+        const fields = document.createElement("div");
+        fields.className = "fields";
+        const state = buttonState(btn);
+        if (state === "invalid") fields.classList.add("error");
+
+        const textInput = document.createElement("input");
+        textInput.type = "text";
+        textInput.placeholder = "Текст кнопки, напр. TikTok";
+        textInput.value = btn.text;
+        textInput.maxLength = 30;
+        textInput.oninput = (e) => {
+          btn.text = e.target.value;
+          refreshPreviewAndButton();
+        };
+
+        const div = document.createElement("div");
+        div.className = "divider";
+
+        const urlInput = document.createElement("input");
+        urlInput.type = "text";
+        urlInput.placeholder = "Ссылка, напр. https://...";
+        urlInput.value = btn.url;
+        urlInput.oninput = (e) => {
+          btn.url = e.target.value;
+          refreshPreviewAndButton();
+        };
+
+        fields.appendChild(textInput);
+        fields.appendChild(div);
+        fields.appendChild(urlInput);
+
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "remove-btn";
+        removeBtn.textContent = "✕";
+        removeBtn.onclick = () => {
+          row.splice(btnIndex, 1);
+          if (row.length === 0) {
+            rows.splice(rowIndex, 1);
+          }
+          render();
+        };
+
+        item.appendChild(fields);
+        item.appendChild(removeBtn);
+        card.appendChild(item);
+      });
+
+      const addButtonBtn = document.createElement("button");
+      addButtonBtn.className = "add-button-btn";
+      addButtonBtn.textContent = "+ Добавить кнопку в этот ряд";
+      addButtonBtn.disabled = row.length >= MAX_BUTTONS_PER_ROW;
+      addButtonBtn.onclick = () => {
+        row.push({ id: nextId(), text: "", url: "" });
+        render();
+      };
+      card.appendChild(addButtonBtn);
+
+      rowsContainer.appendChild(card);
+    });
+
+    addRowBtn.disabled = rows.length >= MAX_ROWS;
+    refreshPreviewAndButton();
+  }
+
+  function refreshPreviewAndButton() {
+    previewContainer.innerHTML = "";
+    let hasAnyValid = false;
+    let hasInvalid = false;
+
+    rows.forEach((row) => {
+      const validButtons = row.filter((b) => buttonState(b) === "valid");
+      row.forEach((b) => {
+        const s = buttonState(b);
+        if (s === "valid") hasAnyValid = true;
+        if (s === "invalid") hasInvalid = true;
+      });
+      if (validButtons.length === 0) return;
+      const previewRow = document.createElement("div");
+      previewRow.className = "preview-row";
+      validButtons.forEach((b) => {
+        const pill = document.createElement("div");
+        pill.className = "preview-pill";
+        pill.textContent = b.text;
+        previewRow.appendChild(pill);
+      });
+      previewContainer.appendChild(previewRow);
+    });
+
+    if (!hasAnyValid) {
+      const hint = document.createElement("div");
+      hint.className = "empty-hint";
+      hint.textContent = "Пока нет ни одной заполненной кнопки";
+      previewContainer.appendChild(hint);
+    }
+
+    if (tg) {
+      if (hasInvalid) {
+        tg.MainButton.setText("Заполните поля кнопок");
+        tg.MainButton.disable();
+      } else {
+        tg.MainButton.setText(hasAnyValid ? "Готово, отправить" : "Готово без кнопок");
+        tg.MainButton.enable();
+      }
+      tg.MainButton.show();
+    }
+  }
+
+  addRowBtn.onclick = () => {
+    if (rows.length >= MAX_ROWS) return;
+    rows.push([{ id: nextId(), text: "", url: "" }]);
+    render();
+  };
+
+  closeLink.onclick = () => {
+    if (tg) tg.close();
+  };
+
+  function submit() {
+    const payload = {
+      rows: rows.map((row) =>
+        row
+          .filter((b) => buttonState(b) === "valid")
+          .map((b) => ({ text: b.text.trim(), url: b.url.trim() }))
+      ).filter((row) => row.length > 0)
+    };
+    if (tg) {
+      tg.sendData(JSON.stringify(payload));
+    }
+  }
+
+  if (tg) {
+    tg.MainButton.onClick(submit);
+  }
+
+  render();
+</script>
+</body>
+</html>
