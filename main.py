@@ -422,7 +422,7 @@ async def _handle_album_part(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 # ------------------------------------------------------------
-#  Шаги сценария /newpost
+#  Шаги сценария /start (создание постов)
 # ------------------------------------------------------------
 
 async def newpost_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -440,7 +440,7 @@ async def newpost_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     context.user_data.clear()
     await update.message.reply_text(
-        "📝 Пришлите содержимое поста: текст, фото, видео, видео-кружок, GIF, документ, "
+        "📝 Пришлите содержимое поста: текст, фото, видео, video_note (кружок), GIF, документ, "
         "аудио или голосовое сообщение — с подписью или без.\n\n"
         "Можно прислать и альбом (несколько фото/видео/документов/аудио одним "
         "пакетом, как обычно в Telegram) — бот дождётся всех частей.\n\n"
@@ -617,7 +617,7 @@ CONTENT_FILTERS = (
 )
 
 newpost_conversation = ConversationHandler(
-    entry_points=[CommandHandler("newpost", newpost_start, filters=filters.ChatType.PRIVATE)],
+    entry_points=[CommandHandler("start", newpost_start, filters=filters.ChatType.PRIVATE)],
     states={
         WAITING_CONTENT: [
             MessageHandler(
