@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Конструктор кнопок</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 14px 14px 96px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--tg-theme-bg-color, #fff);
+    color: var(--tg-theme-text-color, #000);
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .hint { font-size: 13px; opacity: .7; margin: 0 0 16px; }
+  .row {
+    border: 1px solid var(--tg-theme-hint-color, #ccc);
+    border-radius: 12px;
+    padding: 10px;
+    margin-bottom: 12px;
+  }
+  .row-head {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 13px; opacity: .7; margin-bottom: 8px;
+  }
+  .btn-line { display: flex; gap: 6px; margin-bottom: 6px; }
+  .btn-line input {
+    flex: 1; min-width: 0;
+    padding: 9px 10px; font-size: 15px;
+    border: 1px solid var(--tg-theme-hint-color, #ccc);
+    border-radius: 9px;
+    background: var(--tg-theme-secondary-bg-color, #f4f4f5);
+    color: var(--tg-theme-text-color, #000);
+  }
+  input.bad { border-color: #e53935; }
+  .x {
+    flex: 0 0 auto; width: 38px;
+    border: none; border-radius: 9px; cursor: pointer;
+    background: var(--tg-theme-secondary-bg-color, #eee);
+    color: var(--tg-theme-text-color, #000);
+    font-size: 18px;
+  }
+  .add {
+    display: inline-block; margin-top: 4px;
+    padding: 7px 12px; font-size: 14px; cursor: pointer;
+    border: 1px dashed var(--tg-theme-hint-color, #aaa);
+    border-radius: 9px; background: transparent;
+    color: var(--tg-theme-link-color, #2481cc);
+  }
+  #addRow { width: 100%; margin-top: 4px; padding: 12px; }
+  .err { color: #e53935; font-size: 13px; min-height: 18px; margin-top: 6px; }
+</style>
+</head>
+<body>
+  <h1>⚙️ Кнопки поста</h1>
+  <p class="hint">Каждый блок — это ряд. Кнопки внутри ряда встают в одну строку.
+     Ссылка должна начинаться с <code>https://</code>, <code>http://</code> или <code>tg://</code>.</p>
+
+  <div id="rows"></div>
+  <button class="add" id="addRow">➕ Добавить ряд</button>
+  <div class="err" id="err"></div>
+
+<script>
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+
+const rowsEl = document.getElementById('rows');
+const errEl  = document.getElementById('err');
+const URL_RE = /^(https?:\/\/|tg:\/\/)\S+$/i;
+
+function makeButton(row) {
+  const line = document.createElement('div');
+  line.className = 'btn-line';
+  line.innerHTML =
+    '<input class="b-text" placeholder="Текст кнопки">' +
+    '<input class="b-url" placeholder="https://...">' +
+    '<button class="x" title="Удалить">✕</button>';
+  line.querySelector('.x').onclick = () => {
+    line.remove();
+    if (!row.querySelector('.btn-line')) row.remove();
+    validate();
+  };
+  line.querySelectorAll('input').forEach(i => i.addEventListener('input', validate));
+  row.querySelector('.buttons').appendChild(line);
+}
+
+function makeRow() {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML =
+    '<div class="row-head"><span>Ряд</span></div>' +
+    '<div class="buttons"></div>' +
+    '<button class="add addBtn">➕ Кнопка в этот ряд</button>';
+  row.querySelector('.addBtn').onclick = () => { makeButton(row); validate(); };
+  rowsEl.appendChild(row);
+  makeButton(row);
+  renumber();
+}
+
+function renumber() {
+  [...rowsEl.querySelectorAll('.row .row-head span')].forEach((s, i) => s.textContent = 'Ряд ' + (i + 1));
+}
+
+function collect() {
+  const rows = [];
+  for (const rowEl of rowsEl.querySelectorAll('.row')) {
+    const row = [];
+    for (const line of rowEl.querySelectorAll('.btn-line')) {
+      const text = line.querySelector('.b-text').value.trim();
+      const url  = line.querySelector('.b-url').value.trim();
+      line.querySelector('.b-url').classList.toggle('bad', !!url && !URL_RE.test(url));
+      if (text || url) row.push({ text, url, _bad: (!text || !url || !URL_RE.test(url)) });
+    }
+    if (row.length) rows.push(row);
+  }
+  return rows;
+}
+
+function validate() {
+  renumber();
+  const rows = collect();
+  let ok = rows.length > 0;
+  let msg = '';
+  for (const row of rows) for (const b of row) {
+    if (b._bad) {
+      ok = false;
+      msg = 'Заполните текст и корректную ссылку у каждой кнопки.';
+    }
+  }
+  if (rows.length === 0) msg = 'Добавьте хотя бы одну кнопку.';
+  errEl.textContent = msg;
+  if (ok) { tg.MainButton.setText('Сохранить кнопки'); tg.MainButton.show(); tg.MainButton.enable(); }
+  else    { tg.MainButton.hide(); }
+  return ok ? rows : null;
+}
+
+document.getElementById('addRow').onclick = () => { makeRow(); validate(); };
+
+tg.MainButton.onClick(() => {
+  const rows = validate();
+  if (!rows) return;
+  const clean = rows.map(r => r.map(b => ({ text: b.text, url: b.url })));
+  tg.sendData(JSON.stringify({ rows: clean }));
+  tg.close();
+});
+
+makeRow();
+validate();
+</script>
+</body>
+</html>
