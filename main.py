@@ -4,9 +4,12 @@ import os
 import sys
 import json
 import re
+import hashlib
 from aiohttp import web
 from telegram import (
     Update,
+    BotCommand,
+    BotCommandScopeChat,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
@@ -36,7 +39,8 @@ PHOTO_PATH_OR_URL = os.getenv("PHOTO_PATH_OR_URL")
 TIKTOK = os.getenv("TIKTOK_WEBSITE")
 YOUTUBE = os.getenv("YOUTUBE_WEBSITE")
 TWITCH = os.getenv("TWITCH_WEBSITE")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+# rstrip("/") — чтобы случайный слэш в конце переменной не сломал вебхук двойным //
+RENDER_EXTERNAL_URL = (os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/") or None
 
 # --- Переменные для функции "красивые посты в канал" ---
 ADMIN_USER_ID_ENV = os.getenv("ADMIN_USER_ID")               # ID пользователя, которому разрешено создавать посты
@@ -58,8 +62,13 @@ logger = logging.getLogger(__name__)
 
 application: Application = None  # инициализируется в main()
 
+# Секрет для вебхука: используется и как путь эндпоинта, и как secret_token у Telegram,
+# чтобы токен бота не светился в URL и чужие не могли слать боту фейковые апдейты.
+# Вычисляется в main() (когда точно известен BOT_TOKEN).
+WEBHOOK_SECRET: str = ""
+
 # ============================================================
-#  ФУНКЦИЯ 1: авто-репост поста канала в группу (без изменений)
+#  ФУНКЦИЯ 1: авто-репост поста канала в группу
 # ============================================================
 
 async def handle_channel_post_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -187,6 +196,18 @@ def _get_miniapp_url():
     if not RENDER_EXTERNAL_URL:
         return None
     return f"{RENDER_EXTERNAL_URL}/miniapp"
+
+
+def _miniapp_reply_keyboard():
+    """ReplyKeyboard с кнопкой открытия конструктора (или None, если мини-апп недоступен)."""
+    miniapp_url = _get_miniapp_url()
+    if not miniapp_url:
+        return None
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("⚙️ Настроить кнопки поста", web_app=WebAppInfo(url=miniapp_url))]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
 
 
 def parse_keyboard_text(text: str):
@@ -355,13 +376,8 @@ async def _send_content(bot, chat_id, content_items: list, text: str, reply_mark
 async def _prompt_for_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Показывает шаг настройки кнопок (после того как контент поста определён)."""
     message = update.effective_message
-    miniapp_url = _get_miniapp_url()
-    if miniapp_url:
-        keyboard = ReplyKeyboardMarkup(
-            [[KeyboardButton("⚙️ Настроить кнопки поста", web_app=WebAppInfo(url=miniapp_url))]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
+    keyboard = _miniapp_reply_keyboard()
+    if keyboard:
         await message.reply_text(
             "⌨️ Нажмите кнопку ниже, чтобы открыть конструктор — там вы задаёте, сколько "
             "кнопок в каждом ряду, их названия и ссылки.\n\n"
@@ -392,13 +408,11 @@ async def _handle_album_part(update: Update, context: ContextTypes.DEFAULT_TYPE,
     чтобы промежуточные части не сбрасывали диалог обратно в WAITING_CONTENT.
     """
     media_type, file_id = _extract_media(message)
-    if not media_type:
-        # Часть альбома неподдерживаемого типа — просто пропускаем её
-        return None
 
     key = (update.effective_user.id, message.media_group_id)
     entry = pending_albums.setdefault(key, {"items": [], "caption_html": "", "generation": 0})
-    entry["items"].append({"type": media_type, "file_id": file_id, "message_id": message.message_id})
+    if media_type:
+        entry["items"].append({"type": media_type, "file_id": file_id, "message_id": message.message_id})
     if message.caption:
         entry["caption_html"] = message.caption_html
     entry["generation"] += 1
@@ -414,6 +428,14 @@ async def _handle_album_part(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     del pending_albums[key]
     items = sorted(entry["items"], key=lambda it: it["message_id"])
+
+    if not items:
+        # Весь альбом оказался из неподдерживаемых типов — не молчим, а подсказываем.
+        await message.reply_text(
+            "🤔 В этом альбоме не оказалось поддерживаемого контента. "
+            "Пришлите фото, видео, документы или аудио — или /cancel для отмены."
+        )
+        return WAITING_CONTENT
 
     context.user_data["content_items"] = items
     context.user_data["text"] = entry["caption_html"]
@@ -483,13 +505,9 @@ async def newpost_receive_webapp_data(update: Update, context: ContextTypes.DEFA
             f"⚠️ Не удалось обработать клавиатуру: {e}\nОткройте конструктор ещё раз.",
             reply_markup=ReplyKeyboardRemove(),
         )
-        miniapp_url = _get_miniapp_url()
-        keyboard = ReplyKeyboardMarkup(
-            [[KeyboardButton("⚙️ Настроить кнопки поста", web_app=WebAppInfo(url=miniapp_url))]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
-        await message.reply_text("Попробуйте ещё раз:", reply_markup=keyboard)
+        keyboard = _miniapp_reply_keyboard()
+        if keyboard:
+            await message.reply_text("Попробуйте ещё раз:", reply_markup=keyboard)
         return WAITING_KEYBOARD
 
     context.user_data["keyboard_rows"] = rows
@@ -523,8 +541,15 @@ async def newpost_show_preview(update: Update, context: ContextTypes.DEFAULT_TYP
     message = update.effective_message
     rows = context.user_data.get("keyboard_rows")
     preview_rows = [row[:] for row in rows] if rows else []
+    # Панель управления превью: помимо публикации/отмены — «переделать кнопки» и «начать заново».
     preview_rows.append([
         InlineKeyboardButton("✅ Опубликовать", callback_data="newpost_confirm"),
+    ])
+    preview_rows.append([
+        InlineKeyboardButton("✏️ Изменить кнопки", callback_data="newpost_editkb"),
+        InlineKeyboardButton("🔄 Заново", callback_data="newpost_restart"),
+    ])
+    preview_rows.append([
         InlineKeyboardButton("❌ Отмена", callback_data="newpost_cancel"),
     ])
     reply_markup = InlineKeyboardMarkup(preview_rows)
@@ -579,7 +604,7 @@ async def newpost_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             followup_label="👇",
         )
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text("✅ Пост опубликован в канал!")
+        await query.message.reply_text("✅ Пост опубликован в канал!\n\nЧтобы создать ещё один — /start")
         logger.info(f"Пост опубликован в канал {channel_id} пользователем {update.effective_user.id}")
     except Exception as e:
         logger.error(f"Ошибка при публикации поста: {e}")
@@ -589,10 +614,41 @@ async def newpost_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return ConversationHandler.END
 
 
+async def newpost_editkb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Из превью вернуться к настройке кнопок, сохранив уже введённый контент."""
+    query = update.callback_query
+    await query.answer("Меняем кнопки")
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    return await _prompt_for_keyboard(update, context)
+
+
+async def newpost_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Из превью начать пост заново (заново прислать контент)."""
+    query = update.callback_query
+    await query.answer("Начинаем заново")
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    context.user_data.clear()
+    await query.message.reply_text(
+        "🔄 Начинаем заново. Пришлите новое содержимое поста "
+        "(текст / фото / видео / альбом и т.д.).\n\nДля отмены — /cancel",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    return WAITING_CONTENT
+
+
 async def newpost_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    await query.edit_message_reply_markup(reply_markup=None)
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await query.message.reply_text("❌ Создание поста отменено.")
     context.user_data.clear()
     return ConversationHandler.END
@@ -602,6 +658,46 @@ async def newpost_cancel_command(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data.clear()
     await update.message.reply_text("❌ Создание поста отменено.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Короткая справка. Показывается только назначенному администратору."""
+    admin_id = _get_admin_id()
+    if not admin_id or update.effective_user.id != admin_id:
+        return
+    await update.message.reply_text(
+        "🤖 <b>Что умеет бот</b>\n\n"
+        "• /start — создать красивый пост в канал: пришлите контент "
+        "(текст, фото, видео, кружок, GIF, документ, аудио, голосовое или альбом), "
+        "затем настройте кнопки-ссылки через конструктор.\n"
+        "• На шаге кнопок: /skip — без кнопок.\n"
+        "• В превью: ✅ опубликовать, ✏️ изменить кнопки, 🔄 начать заново, ❌ отмена.\n"
+        "• /cancel — отменить создание поста в любой момент.\n\n"
+        "Отдельно бот автоматически отвечает на посты канала в привязанной группе, "
+        "добавляя блок с соц-сетями.",
+        parse_mode="HTML",
+    )
+
+
+async def stray_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Данные из конструктора кнопок, пришедшие ВНЕ создания поста
+    (например, пользователь открыл сохранённую reply-клавиатуру позже).
+    Не теряем их молча, а подсказываем начать заново.
+    """
+    admin_id = _get_admin_id()
+    if not admin_id or update.effective_user.id != admin_id:
+        return
+    await update.effective_message.reply_text(
+        "ℹ️ Кнопки получены, но сейчас мы не создаём пост. "
+        "Отправьте /start и настройте их на нужном шаге.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Глобальный обработчик ошибок — чтобы исключения в колбэках не пропадали молча."""
+    logger.exception("Необработанная ошибка при обработке апдейта", exc_info=context.error)
 
 
 # Любой из этих типов контента принимается на шаге WAITING_CONTENT.
@@ -635,6 +731,8 @@ newpost_conversation = ConversationHandler(
         ],
         WAITING_CONFIRM: [
             CallbackQueryHandler(newpost_confirm, pattern="^newpost_confirm$"),
+            CallbackQueryHandler(newpost_editkb, pattern="^newpost_editkb$"),
+            CallbackQueryHandler(newpost_restart, pattern="^newpost_restart$"),
             CallbackQueryHandler(newpost_cancel_callback, pattern="^newpost_cancel$"),
         ],
     },
@@ -647,6 +745,10 @@ newpost_conversation = ConversationHandler(
 # ============================================================
 
 async def handle_telegram_webhook(request: web.Request) -> web.Response:
+    # Проверяем секретный заголовок — чтобы обрабатывать только настоящие апдейты Telegram.
+    if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+        logger.warning("Отклонён запрос на вебхук с неверным secret_token")
+        return web.Response(status=403, text="Forbidden")
     try:
         data = await request.json()
     except Exception:
@@ -664,12 +766,34 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.Response(text="Bot is running")
 
 
+async def _setup_commands() -> None:
+    """Меню команд бота (видно по кнопке ☰ в личке у администратора)."""
+    admin_id = _get_admin_id()
+    if not admin_id:
+        return
+    commands = [
+        BotCommand("start", "📝 Создать пост в канал"),
+        BotCommand("cancel", "❌ Отменить создание поста"),
+        BotCommand("help", "ℹ️ Справка"),
+    ]
+    try:
+        await application.bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id=admin_id))
+    except Exception as e:
+        logger.warning(f"Не удалось установить меню команд: {e}")
+
+
 async def on_startup(aio_app: web.Application) -> None:
     await application.initialize()
     await application.start()
-    webhook_url = f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}"
-    await application.bot.set_webhook(url=webhook_url, allowed_updates=Update.ALL_TYPES)
-    logger.info(f"Вебхук установлен: {webhook_url}")
+    webhook_url = f"{RENDER_EXTERNAL_URL}/{WEBHOOK_SECRET}"
+    await application.bot.set_webhook(
+        url=webhook_url,
+        allowed_updates=Update.ALL_TYPES,
+        secret_token=WEBHOOK_SECRET,
+        drop_pending_updates=True,
+    )
+    await _setup_commands()
+    logger.info("Вебхук установлен (секретный путь скрыт в логах).")
     logger.info(f"Мини-приложение доступно на: {_get_miniapp_url()}")
 
 
@@ -679,7 +803,7 @@ async def on_cleanup(aio_app: web.Application) -> None:
 
 
 def main() -> None:
-    global application
+    global application, WEBHOOK_SECRET
 
     if not BOT_TOKEN:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная TELEGRAM_BOT_TOKEN не настроена!")
@@ -688,6 +812,10 @@ def main() -> None:
     if not RENDER_EXTERNAL_URL:
         logger.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная RENDER_EXTERNAL_URL не настроена на Render!")
         sys.exit(1)
+
+    # Секрет для вебхука: явный WEBHOOK_SECRET из окружения либо детерминированный
+    # хэш от токена (безопасный набор символов, токен в URL не светится).
+    WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or hashlib.sha256(BOT_TOKEN.encode()).hexdigest()
 
     application = (
         Application.builder()
@@ -699,11 +827,15 @@ def main() -> None:
     )
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, handle_channel_post_in_group))
     application.add_handler(newpost_conversation)
+    application.add_handler(CommandHandler("help", help_command, filters=filters.ChatType.PRIVATE))
+    # Данные вебаппа, пришедшие вне диалога (после ConversationHandler, чтобы не перехватывать активный сценарий).
+    application.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, stray_webapp_data))
+    application.add_error_handler(on_error)
 
     aio_app = web.Application()
     aio_app.router.add_get("/", handle_health)
     aio_app.router.add_get("/miniapp", handle_miniapp)
-    aio_app.router.add_post(f"/{BOT_TOKEN}", handle_telegram_webhook)
+    aio_app.router.add_post(f"/{WEBHOOK_SECRET}", handle_telegram_webhook)
     aio_app.on_startup.append(on_startup)
     aio_app.on_cleanup.append(on_cleanup)
 
